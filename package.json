@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "embeddings": "tsx src/scripts/generar_embeddings.ts",
+    "buscar": "tsx src/scripts/buscar_semantica.ts",
+    "preguntar": "tsx src/scripts/asistente_rag.ts",
     "build": "tsc"
   },
   "keywords": [],
@@ -15,7 +18,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.112.2",
     "dotenv": "^17.4.2",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "openai": "^7.4.0"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

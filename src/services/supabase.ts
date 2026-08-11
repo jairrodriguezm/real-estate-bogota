@@ -143,22 +143,27 @@ export async function procesarInmueble(
   } else {
     // IF NOT exists: Compare precio_m2 against barrios_bogota average for that barrio
     if (item.barrio_normalizado) {
-      const { data: barrioData, error: errBarrio } = await supabase
-        .from('barrios_bogota')
-        .select('*')
-        .or(`nombre_normalizado.eq.${item.barrio_normalizado},nombre.eq.${item.barrio_normalizado}`)
-        .maybeSingle();
+      try {
+        const { data: barrioInfo, error: errBarrio } = await supabase
+          .from('barrios_bogota')
+          .select('precio_promedio_m2, estrato_predominante')
+          .eq('localidad', item.localidad)
+          .eq('barrio_normalizado', item.barrio_normalizado)
+          .maybeSingle();
 
-      if (!errBarrio && barrioData) {
-        const promedioBarrio = barrioData.precio_m2_promedio ?? barrioData.promedio_precio_m2 ?? barrioData.precio_m2 ?? 0;
-        if (promedioBarrio > 0) {
-          const umbralAlerta = promedioBarrio * (1 - config.porcentaje_descuento_alerta / 100);
-          if (precio_m2 <= umbralAlerta) {
-            const porcentajeDescuento = ((promedioBarrio - precio_m2) / promedioBarrio) * 100;
+        if (errBarrio) {
+          console.warn(`[Supabase] Advertencia: No se pudo consultar barrios_bogota para "${item.barrio_normalizado}" en ${item.localidad}:`, errBarrio.message);
+        } else if (barrioInfo && barrioInfo.precio_promedio_m2 && barrioInfo.precio_promedio_m2 > 0) {
+          const promedioBarrio = barrioInfo.precio_promedio_m2;
+          const porcentajeDescuento = ((promedioBarrio - precio_m2) / promedioBarrio) * 100;
+
+          if (porcentajeDescuento >= config.porcentaje_descuento_alerta) {
             // Call notificarOportunidad() from ./telegram.js
             await notificarOportunidad(propActual, porcentajeDescuento, promedioBarrio);
           }
         }
+      } catch (err: any) {
+        console.warn(`[Supabase] Excepción al consultar barrio "${item.barrio_normalizado}":`, err?.message || err);
       }
     }
   }
