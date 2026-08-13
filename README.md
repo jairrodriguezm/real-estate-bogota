@@ -19,33 +19,34 @@ An end-to-end autonomous data engineering and AI-driven investment analysis plat
 
 ```mermaid
 flowchart TD
-    subgraph Data Extraction & Automation
-        A[External Real Estate Portals] -->|Browser Automation / Playwright| B[Scraper & Enrichment Engine]
-        B -->|Anti-Bot & Rate-Limit Guard| C[DOM & Script State Parser]
+    subgraph S1 ["Data Extraction & Automation"]
+        A["External Real Estate Portals"] -->|"Browser Automation / Playwright"| B["Scraper & Enrichment Engine"]
+        B -->|"Anti-Bot & Rate-Limit Guard"| C["DOM & Script State Parser"]
     end
 
-    subgraph Database & Persistence Layer
-        C -->|Upsert & Deduplication| D[(Supabase / PostgreSQL)]
-        D --> E[propiedades]
-        D --> F[barrios_metricas]
-        D --> G[historial_precios]
+    subgraph S2 ["Database & Persistence Layer"]
+        C -->|"Upsert & Deduplication"| D[("Supabase / PostgreSQL")]
+        D --> E["propiedades"]
+        D --> F["barrios_metricas"]
+        D --> G["historial_precios"]
     end
 
-    subgraph Data Processing & Analytics
-        E -->|Statistical Aggregation| H[Neighborhood Metrics Engine]
-        H -->|Identify Sub-Market Deals| F
-        E -->|Missing Embeddings| I[OpenAI Embeddings Pipeline]
-        I -->|text-embedding-3-small| E
+    subgraph S3 ["Data Processing & Analytics"]
+        E -->|"Statistical Aggregation"| H["Neighborhood Metrics Engine"]
+        H -->|"Identify Sub-Market Deals"| F
+        E -->|"Missing Embeddings"| I["OpenAI Embeddings Pipeline"]
+        I -->|"text-embedding-3-small"| E
     end
 
-    subgraph AI Assistant & Notification Layer
-        E -->|Vector Search RPC| J[Supabase pgvector]
-        K[User Query / CLI] -->|Embedding Query| J
-        J -->|Contextual Top K Properties| L[RAG Financial Analyst GPT-4o-mini]
-        L -->|Investment Insights| M[Console / Output]
+    subgraph S4 ["AI Assistant & Notification Layer"]
+        E -->|"Vector Search RPC"| J["Supabase pgvector"]
+        K["User Query / CLI"] -->|"Embedding Query"| J
+        J -->|"Contextual Top K Properties"| L["RAG Financial Analyst GPT-4o-mini"]
+        L -->|"Investment Insights"| M["Console / Output"]
         
-        E -->|Price Drop / Bargain Detected| N[Telegram Alert Service]
-        N -->|Markdown Push Alert| O[Telegram Channel]
+        E -->|"Price Drop / Bargain Detected"| N["Telegram Alert Service"]
+        N -->|"Markdown Push Alert"| O["Telegram Channel"]
+    end
 ```
 
 ---
