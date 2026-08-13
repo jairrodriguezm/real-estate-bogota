@@ -35,6 +35,11 @@ export interface PropiedadEntrada {
   localidad: LocalidadBogota;
   barrio_normalizado?: string;
   fecha_publicacion?: string;
+  deposito?: boolean;
+  ascensor?: boolean;
+  antiguedad?: string;
+  conjunto_cerrado?: boolean;
+  vista?: string;
 }
 
 export interface PropiedadBD extends PropiedadEntrada {

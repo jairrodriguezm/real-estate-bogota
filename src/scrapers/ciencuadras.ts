@@ -1,7 +1,8 @@
 /// <reference lib="dom" />
-import { chromium } from 'playwright';
+import { chromium, BrowserContext, Page, Browser } from 'playwright';
 import { ConfiguracionBusqueda, PropiedadEntrada } from '../types/index.js';
 import { normalizarLocalidad, normalizarBarrio } from '../utils/normalizer.js';
+import { supabase, procesarInmueblesBatch } from '../services/supabase.js';
 
 const TARGET_URLS = [
   'https://www.ciencuadras.com/venta/bogota/apartamento/2hab-1par/desde-35-m2/de-estrato-3-y-4-y-5-y-6',
@@ -12,22 +13,173 @@ function limpiarNombreBarrio(raw: string): string {
   if (!raw) return '';
 
   let limpio = raw
-    // Cut everything from the first occurrence of attached digits at the end
     .replace(/\d+.*$/g, '')
-    // Remove keywords if any remain
     .replace(/\b(?:m2|m²|habit|hab|banos|baños|garaje|gar|parqueadero|bogota|suba|usaquen|chapinero|teusaquillo)\b/gi, '')
     .trim();
 
   return limpio;
 }
 
-export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise<PropiedadEntrada[]> {
-  let browser = null;
-  const mapaResultados = new Map<string, PropiedadEntrada>();
-  const MAX_PAGES_PER_URL = 30;
+async function extraerDetallePropiedad(
+  browser: Browser,
+  url: string
+): Promise<Partial<PropiedadEntrada>> {
+  let detailPage: Page | null = null;
+  try {
+    detailPage = await browser.newPage();
+
+    // Block unnecessary heavy resources to accelerate load and prevent navigation crashes
+    await detailPage.route('**/*', (route) => {
+      const resourceType = route.request().resourceType();
+      if (['image', 'media', 'font', 'stylesheet'].includes(resourceType)) {
+        route.abort();
+      } else {
+        route.continue();
+      }
+    });
+
+    await detailPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+    const bodyText = (await detailPage.textContent('body'))?.toLowerCase() || '';
+
+    const deposito =
+      bodyText.includes('depósito') ||
+      bodyText.includes('deposito') ||
+      bodyText.includes('bodega');
+
+    const ascensor = bodyText.includes('ascensor');
+
+    const conjunto_cerrado = bodyText.includes('conjunto cerrado');
+
+    const descElement = await detailPage.$('.description-content, [class*="description"], #description');
+    let descripcion = descElement ? (await descElement.textContent())?.trim() : undefined;
+    if (descripcion && descripcion.length === 0) {
+      descripcion = undefined;
+    }
+
+    let antiguedad: string | undefined = undefined;
+    const rawBodyText = (await detailPage.textContent('body')) || '';
+    const antiguedadMatch = rawBodyText.match(/(?:antigüedad|antiguedad|años de construido|tiempo de construido)\s*:?\s*([^\n\r,.]+)/i);
+    if (antiguedadMatch) {
+      antiguedad = antiguedadMatch[1].trim();
+    } else {
+      const ageRangeMatch = rawBodyText.match(/(?:sobre planos|en construcción|a estrenar|1 a 8 años|9 a 15 años|16 a 30 años|más de 20 años|más de 30 años|remodelar|entre 1 y 5 años|\d+\s*años)/i);
+      if (ageRangeMatch) {
+        antiguedad = ageRangeMatch[0].trim();
+      }
+    }
+
+    let vista: string | undefined = undefined;
+    const vistaMatch = rawBodyText.match(/(?:vista|tipo de vista)\s*:?\s*([^\n\r,.]+)/i);
+    if (vistaMatch) {
+      vista = vistaMatch[1].trim();
+    } else {
+      const vistaKeyword = rawBodyText.match(/(?:vista exterior|vista interior|vista panorámica|vista panoramica)/i);
+      if (vistaKeyword) {
+        vista = vistaKeyword[0].trim();
+      }
+    }
+
+    const antiguedadLimpia = antiguedad ? antiguedad.trim().substring(0, 49) : undefined;
+    const vistaLimpia = vista ? vista.trim().substring(0, 49) : undefined;
+
+    return {
+      descripcion,
+      deposito,
+      ascensor,
+      antiguedad: antiguedadLimpia,
+      vista: vistaLimpia,
+      conjunto_cerrado,
+    };
+  } catch (err) {
+    console.warn(`[PHASE 3] Skipping detail for ${url} due to navigation or extraction error.`);
+    return {};
+  } finally {
+    if (detailPage) {
+      await detailPage.close().catch(() => {});
+    }
+  }
+}
+
+export async function enriquecerDetallesPendientes(browser: Browser, limit = 50): Promise<void> {
+  console.log(`[PHASE 3] Buscando propiedades en Supabase con detalles pendientes (límite: ${limit})...`);
 
   try {
-    // 1. Launch browser in non-headless mode with slowMo for visual debugging
+    const { data: pendientes, error } = await supabase
+      .from('propiedades')
+      .select('id, url_anuncio')
+      .or('descripcion.is.null,antiguedad.is.null')
+      .limit(limit);
+
+    if (error) {
+      console.error('[PHASE 3] Error al consultar propiedades pendientes en Supabase:', error.message);
+      return;
+    }
+
+    if (!pendientes || pendientes.length === 0) {
+      console.log('[PHASE 3] No hay propiedades pendientes por enriquecer detalles.');
+      return;
+    }
+
+    console.log(`[PHASE 3] Encontradas ${pendientes.length} propiedades pendientes por enriquecer detalles.`);
+
+    let count = 0;
+    for (const item of pendientes) {
+      count++;
+      console.log(`[PHASE 3] Enriqueciendo detalle (${count}/${pendientes.length}): ${item.url_anuncio}`);
+
+      try {
+        const detalle = await extraerDetallePropiedad(browser, item.url_anuncio);
+
+        const updatePayload: Record<string, any> = {};
+        if (detalle.descripcion) updatePayload.descripcion = detalle.descripcion;
+        if (detalle.deposito !== undefined) updatePayload.deposito = detalle.deposito;
+        if (detalle.ascensor !== undefined) updatePayload.ascensor = detalle.ascensor;
+
+        if (detalle.antiguedad) {
+          const antiguedadLimpia = detalle.antiguedad.trim().substring(0, 49);
+          if (antiguedadLimpia.length > 0) {
+            updatePayload.antiguedad = antiguedadLimpia;
+          }
+        }
+
+        if (detalle.vista) {
+          const vistaLimpia = detalle.vista.trim().substring(0, 49);
+          if (vistaLimpia.length > 0) {
+            updatePayload.vista = vistaLimpia;
+          }
+        }
+
+        if (detalle.conjunto_cerrado !== undefined) updatePayload.conjunto_cerrado = detalle.conjunto_cerrado;
+
+        if (Object.keys(updatePayload).length > 0) {
+          const { error: errUpdate } = await supabase
+            .from('propiedades')
+            .update(updatePayload)
+            .eq('id', item.id);
+
+          if (errUpdate) {
+            console.warn(`[PHASE 3] Error actualizando registro ${item.id} en Supabase. Payload: ${JSON.stringify(updatePayload)} - Error: ${errUpdate.message}`);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[PHASE 3] Error procesando detalle para ${item.url_anuncio}:`, err?.message || err);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    console.log('[PHASE 3] Finalizado enriquecimiento de detalles.');
+  } catch (err: any) {
+    console.error('[PHASE 3] Error general en el bucle de enriquecimiento:', err?.message || err);
+  }
+}
+
+export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise<PropiedadEntrada[]> {
+  let browser: Browser | null = null;
+  const mapaResultados = new Map<string, PropiedadEntrada>();
+
+  try {
     browser = await chromium.launch({
       headless: false,
       slowMo: 100,
@@ -40,10 +192,12 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
 
     const page = await context.newPage();
 
-    // 2. Loop through each URL in TARGET_URLS
+    // PHASE 1: Collect All Listings in Memory
+    console.log('[CienCuadras] [PHASE 1] Iniciando extracción de todos los listados en memoria...');
+
     for (let urlIndex = 0; urlIndex < TARGET_URLS.length; urlIndex++) {
       const targetUrl = TARGET_URLS[urlIndex];
-      console.log(`[CienCuadras] Iniciando búsqueda URL ${urlIndex + 1}/${TARGET_URLS.length}: ${targetUrl}...`);
+      console.log(`[CienCuadras] [PHASE 1] Búsqueda URL ${urlIndex + 1}/${TARGET_URLS.length}: ${targetUrl}...`);
 
       try {
         try {
@@ -52,9 +206,11 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
           console.warn(`[CienCuadras] Goto domcontentloaded para URL ${urlIndex + 1} dio timeout o finalizó, continuando...`);
         }
 
-        // 3. Execute pagination loop for currentPage = 1 up to 30
-        for (let currentPage = 1; currentPage <= MAX_PAGES_PER_URL; currentPage++) {
-          // Perform progressive page scroll
+        let pageIndex = 1;
+        let hasNextPage = true;
+
+        while (hasNextPage) {
+          // Perform progressive scroll down page
           await page.evaluate(async () => {
             await new Promise((resolve) => {
               let totalHeight = 0;
@@ -73,7 +229,7 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
 
           await page.waitForTimeout(1000);
 
-          // Extract cards from DOM
+          // Extract property cards from DOM
           const rawCards = await page.evaluate(() => {
             const selectors = ['a[href*="/inmueble/"]', '[class*="card"]', '[class*="property"]', 'article'];
             const elements = Array.from(document.querySelectorAll(selectors.join(', ')));
@@ -99,8 +255,6 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
               };
             });
           });
-
-          let extraidosPagina = 0;
 
           for (const raw of rawCards) {
             let id = raw.idData ? raw.idData.replace(/[^a-zA-Z0-9_-]/g, '') : '';
@@ -255,40 +409,47 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
 
             if (!mapaResultados.has(cleanId)) {
               mapaResultados.set(cleanId, propiedad);
-              extraidosPagina++;
             }
           }
 
-          console.log(`[CienCuadras] [URL ${urlIndex + 1}] Página ${currentPage}/30 procesada. Acumulado total: ${mapaResultados.size} (nuevos en esta página: ${extraidosPagina})`);
+          console.log(`[CienCuadras] Página ${pageIndex} procesada. Total acumulado en memoria: ${mapaResultados.size}`);
 
-          // 4. If currentPage < 30, advance to next page
-          if (currentPage < MAX_PAGES_PER_URL) {
-            await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-            await page.waitForTimeout(1000);
+          // Check for next page element dynamically
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await page.waitForTimeout(1000);
 
-            const pagElements = await page.$$('ul.pagination li, [class*="pagination"] *, nav[aria-label*="pagin" i] *');
-            let clicked = false;
-            const targetPageNum = currentPage + 1;
+          const pagElements = await page.$$('ul.pagination li, [class*="pagination"] *, nav[aria-label*="pagin" i] *');
+          let clicked = false;
+          const targetPageNum = pageIndex + 1;
 
-            for (const el of pagElements) {
-              const text = (await el.textContent())?.trim();
-              if (text === String(targetPageNum) || text === '>' || text?.toLowerCase().includes('siguiente')) {
-                await el.scrollIntoViewIfNeeded().catch(() => {});
-                await page.evaluate((node) => (node as HTMLElement).click(), el);
-                clicked = true;
-                break;
-              }
-            }
+          for (const el of pagElements) {
+            const isTarget = await el.evaluate((node, targetNum) => {
+              const text = (node.textContent || '').trim();
+              const isDisabled =
+                node.hasAttribute('disabled') ||
+                node.classList.contains('disabled') ||
+                node.getAttribute('aria-disabled') === 'true';
+              if (isDisabled) return false;
+              return text === String(targetNum) || text === '>' || text.toLowerCase().includes('siguiente');
+            }, targetPageNum);
 
-            if (!clicked) {
-              console.log(`[CienCuadras] [URL ${urlIndex + 1}] No se encontró elemento de página ${targetPageNum}. Finalizando paginación de esta URL.`);
+            if (isTarget) {
+              await el.scrollIntoViewIfNeeded().catch(() => {});
+              await page.evaluate((node) => (node as HTMLElement).click(), el);
+              clicked = true;
               break;
             }
+          }
 
+          if (!clicked) {
+            console.log(`[CienCuadras] [URL ${urlIndex + 1}] No se encontró elemento de siguiente página (${targetPageNum}). Finalizando paginación de esta URL.`);
+            hasNextPage = false;
+          } else {
+            pageIndex++;
             try {
               await page.waitForLoadState('networkidle', { timeout: 15000 });
             } catch (_) {}
-            await page.waitForTimeout(3500);
+            await page.waitForTimeout(3000);
           }
         }
       } catch (urlError) {
@@ -296,11 +457,25 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
       }
     }
 
-    const acumulados = Array.from(mapaResultados.values());
-    console.log(`[CienCuadras] Scraping completado en todas las URLs (${TARGET_URLS.length}). Total final de inmuebles únicos: ${acumulados.length}`);
-    return acumulados;
+    // PHASE 2: Single Mass Save to Supabase
+    const items = Array.from(mapaResultados.values());
+    console.log(`[CienCuadras] [PHASE 2] Iniciando guardado masivo de ${items.length} inmuebles en Supabase...`);
+
+    if (items.length > 0) {
+      await procesarInmueblesBatch(items, config);
+    }
+    console.log(`[CienCuadras] Guardado masivo completado. ${items.length} registros sincronizados en Supabase.`);
+
+    // PHASE 3: Detail Enrichment Loop
+    if (browser && items.length > 0) {
+      console.log('[CienCuadras] [PHASE 3] Iniciando bucle de enriquecimiento de detalles...');
+      await enriquecerDetallesPendientes(browser, 50);
+    }
+
+    console.log(`[CienCuadras] Proceso completado exitosamente. Total final: ${items.length} propiedades.`);
+    return items;
   } catch (error) {
-    console.error('[CienCuadras Scraper] Error crítico al ejecutar scraper:', error);
+    console.error('[CienCuadras Scraper] Error crítico en pipeline:', error);
     return Array.from(mapaResultados.values());
   } finally {
     if (browser) {

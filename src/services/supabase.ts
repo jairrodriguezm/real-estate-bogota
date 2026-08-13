@@ -168,3 +168,16 @@ export async function procesarInmueble(
     }
   }
 }
+
+export async function procesarInmueblesBatch(
+  items: PropiedadEntrada[],
+  config: ConfiguracionBusqueda
+): Promise<void> {
+  for (const item of items) {
+    try {
+      await procesarInmueble(item, config);
+    } catch (err: any) {
+      console.error(`[Supabase Batch] Error procesando inmueble (${item.id_anuncio_externo}):`, err?.message || err);
+    }
+  }
+}

@@ -6,8 +6,12 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "embeddings": "tsx src/scripts/generar_embeddings.ts",
+    "enriquecer": "tsx src/scripts/enriquecer_detalles.ts",
+    "prueba-enriquecer": "tsx src/scripts/prueba_enriquecer.ts",
+    "limpiar": "tsx src/scripts/limpiar_inactivos.ts",
     "buscar": "tsx src/scripts/buscar_semantica.ts",
     "preguntar": "tsx src/scripts/asistente_rag.ts",
+    "metricas": "tsx src/scripts/calcular_metricas_barrios.ts",
     "build": "tsc"
   },
   "keywords": [],
