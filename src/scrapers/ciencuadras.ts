@@ -181,9 +181,16 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
   const scrapedExternalIds = new Set<string>();
 
   try {
+    const isHeadless = process.env.HEADLESS !== 'false';
+
     browser = await chromium.launch({
-      headless: false,
-      slowMo: 100,
+      headless: isHeadless,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
     });
 
     const context = await browser.newContext({

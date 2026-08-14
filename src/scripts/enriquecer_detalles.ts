@@ -35,9 +35,16 @@ async function main() {
 
       console.log(`[Enriquecer] [Lote #${batchNum}] Procesando ${pendientes.length} inmuebles ACTIVOS...`);
 
+      const isHeadless = process.env.HEADLESS !== 'false';
+
       const browser = await chromium.launch({
-        headless: false,
-        slowMo: 100,
+        headless: isHeadless,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+        ],
       });
 
       const context = await browser.newContext({

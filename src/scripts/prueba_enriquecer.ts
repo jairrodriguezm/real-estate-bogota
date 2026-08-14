@@ -5,8 +5,16 @@ import { supabase } from '../services/supabase.js';
 dotenv.config();
 
 async function main() {
-  console.log('[DEBUG] Inicializando Playwright y Supabase...');
-  const browser = await chromium.launch({ headless: false });
+  const isHeadless = process.env.HEADLESS !== 'false';
+  const browser = await chromium.launch({
+    headless: isHeadless,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
+  });
 
   try {
     const { data: pendientes, error } = await supabase
