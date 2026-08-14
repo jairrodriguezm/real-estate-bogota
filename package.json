@@ -12,6 +12,7 @@
     "buscar": "tsx src/scripts/buscar_semantica.ts",
     "preguntar": "tsx src/scripts/asistente_rag.ts",
     "metricas": "tsx src/scripts/calcular_metricas_barrios.ts",
+    "joyas": "tsx src/scripts/detectar_joyas_remodelar.ts",
     "build": "tsc"
   },
   "keywords": [],

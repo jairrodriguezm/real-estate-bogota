@@ -36,6 +36,7 @@ async function main(): Promise<void> {
     console.log(`- Total de inmuebles procesados: ${procesados}`);
     console.log(`- Tiempo total de ejecución: ${duracionSegundos}s`);
     console.log('====================================\n');
+    console.log('[Scraper] Búsqueda y guardado base completados con éxito. Para enriquecer detalles profundos ejecute: npm run enriquecer');
   } catch (error) {
     console.error('❌ Error crítico en el pipeline:', error);
     process.exit(1);

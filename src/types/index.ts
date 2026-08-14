@@ -1,4 +1,4 @@
-export type LocalidadBogota = 'Usaquén' | 'Suba' | 'Barrios Unidos' | 'Chapinero' | 'Teusaquillo';
+export type LocalidadBogota = 'Usaquén' | 'Suba' | 'Barrios Unidos' | 'Chapinero' | 'Teusaquillo' | 'Kennedy';
 
 export type PortalOrigen = 'mercadolibre' | 'fincaraiz' | 'metrocuadrado' | 'ciencuadras' | 'estrenarvivienda';
 

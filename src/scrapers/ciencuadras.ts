@@ -5,8 +5,8 @@ import { normalizarLocalidad, normalizarBarrio } from '../utils/normalizer.js';
 import { supabase, procesarInmueblesBatch } from '../services/supabase.js';
 
 const TARGET_URLS = [
-  'https://www.ciencuadras.com/venta/bogota/apartamento/2hab-1par/desde-35-m2/de-estrato-3-y-4-y-5-y-6',
-  'https://www.ciencuadras.com/venta/bogota/apartamento/3hab-1par/desde-35-m2/de-estrato-3-y-4-y-5-y-6',
+  'https://www.ciencuadras.com/venta/bogota/apartamento/1par/desde-32-m2/de-estrato-3-y-4-y-5-y-6?q=bogota',
+  'https://www.ciencuadras.com/venta/bogota/apartamento/2par/desde-32-m2/de-estrato-3-y-4-y-5-y-6',
 ];
 
 function limpiarNombreBarrio(raw: string): string {
@@ -14,7 +14,7 @@ function limpiarNombreBarrio(raw: string): string {
 
   let limpio = raw
     .replace(/\d+.*$/g, '')
-    .replace(/\b(?:m2|m²|habit|hab|banos|baños|garaje|gar|parqueadero|bogota|suba|usaquen|chapinero|teusaquillo)\b/gi, '')
+    .replace(/\b(?:m2|m²|habit|hab|banos|baños|garaje|gar|parqueadero|bogota|suba|usaquen|chapinero|teusaquillo|kennedy)\b/gi, '')
     .trim();
 
   return limpio;
@@ -178,6 +178,7 @@ export async function enriquecerDetallesPendientes(browser: Browser, limit = 50)
 export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise<PropiedadEntrada[]> {
   let browser: Browser | null = null;
   const mapaResultados = new Map<string, PropiedadEntrada>();
+  const scrapedExternalIds = new Set<string>();
 
   try {
     browser = await chromium.launch({
@@ -276,6 +277,7 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
             if (cleanId.length > 50) {
               cleanId = cleanId.substring(0, 49);
             }
+            scrapedExternalIds.add(cleanId);
 
             let url = raw.href;
             if (url && !url.startsWith('http')) {
@@ -374,7 +376,7 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
 
             if (!rawBarrio) {
               const titleWords = raw.titleText
-                .replace(/apartamento|venta|en|bogot[aá]|suba|usaqu[eé]n|chapinero|teusaquillo|barrios unidos/gi, '')
+                .replace(/apartamento|venta|en|bogot[aá]|suba|usaqu[eé]n|chapinero|teusaquillo|barrios unidos|kennedy/gi, '')
                 .trim();
               rawBarrio = titleWords || raw.fullText;
             }
@@ -466,13 +468,50 @@ export async function extraerCienCuadras(config: ConfiguracionBusqueda): Promise
     }
     console.log(`[CienCuadras] Guardado masivo completado. ${items.length} registros sincronizados en Supabase.`);
 
-    // PHASE 3: Detail Enrichment Loop
-    if (browser && items.length > 0) {
-      console.log('[CienCuadras] [PHASE 3] Iniciando bucle de enriquecimiento de detalles...');
-      await enriquecerDetallesPendientes(browser, 50);
+    // RECONCILIATION PHASE: Purge inactive listings not found in current scrape
+    console.log('[Reconciliación] Iniciando fase de reconciliación de inmuebles...');
+    try {
+      const { data: dbProps, error: dbError } = await supabase
+        .from('propiedades')
+        .select('id, id_anuncio_externo')
+        .eq('activo', true)
+        .eq('portal_origen', 'ciencuadras');
+
+      if (dbError) {
+        console.error('[Reconciliación] Error al consultar inmuebles en Supabase:', dbError.message);
+      } else {
+        const inactiveIdsToDelete = (dbProps || [])
+          .filter((p) => p.id_anuncio_externo && !scrapedExternalIds.has(p.id_anuncio_externo))
+          .map((p) => p.id);
+
+        if (inactiveIdsToDelete.length > 0) {
+          for (let i = 0; i < inactiveIdsToDelete.length; i += 100) {
+            const chunk = inactiveIdsToDelete.slice(i, i + 100);
+            const { error: deleteError } = await supabase
+              .from('propiedades')
+              .delete()
+              .in('id', chunk);
+
+            if (deleteError) {
+              console.error('[Reconciliación] Error al eliminar inmuebles inactivos:', deleteError.message);
+            }
+          }
+          console.log(`[Reconciliación] Se eliminaron ${inactiveIdsToDelete.length} inmuebles que ya no están publicados en CienCuadras.`);
+        } else {
+          console.log('[Reconciliación] Todos los inmuebles en base de datos siguen vigentes.');
+        }
+      }
+    } catch (reconcileErr: any) {
+      console.error('[Reconciliación] Error general durante la reconciliación:', reconcileErr?.message || reconcileErr);
     }
 
-    console.log(`[CienCuadras] Proceso completado exitosamente. Total final: ${items.length} propiedades.`);
+    // PHASE 3: Detail Enrichment Loop (Desacoplado - ejecutar vía npm run enriquecer)
+    // if (browser && items.length > 0) {
+    //   console.log('[CienCuadras] [PHASE 3] Iniciando bucle de enriquecimiento de detalles...');
+    //   await enriquecerDetallesPendientes(browser, 50);
+    // }
+
+    console.log(`[CienCuadras] Proceso de extracción base completado exitosamente. Total final: ${items.length} propiedades.`);
     return items;
   } catch (error) {
     console.error('[CienCuadras Scraper] Error crítico en pipeline:', error);
